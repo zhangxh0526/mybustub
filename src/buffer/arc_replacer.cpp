@@ -1,4 +1,3 @@
-// :bustub-keep-private:
 //===----------------------------------------------------------------------===//
 //
 //                         BusTub
@@ -13,114 +12,244 @@
 
 #include "buffer/arc_replacer.h"
 #include <optional>
+#include <algorithm>
+#include <stdexcept>
 #include "common/config.h"
 
 namespace bustub {
 
 /**
- *
- * TODO(P1): Add implementation
- *
  * @brief a new ArcReplacer, with lists initialized to be empty and target size to 0
  * @param num_frames the maximum number of frames the ArcReplacer will be required to cache
  */
 ArcReplacer::ArcReplacer(size_t num_frames) : replacer_size_(num_frames) {}
 
 /**
- * TODO(P1): Add implementation
- *
  * @brief Performs the Replace operation as described by the writeup
  * that evicts from either mfu_ or mru_ into its corresponding ghost list
  * according to balancing policy.
- *
- * If you wish to refer to the original ARC paper, please note that there are
- * two changes in our implementation:
- * 1. When the size of mru_ equals the target size, we don't check
- * the last access as the paper did when deciding which list to evict from.
- * This is fine since the original decision is stated to be arbitrary.
- * 2. Entries that are not evictable are skipped. If all entries from the desired side
- * (mru_ / mfu_) are pinned, we instead try victimize the other side (mfu_ / mru_),
- * and move it to its corresponding ghost list (mfu_ghost_ / mru_ghost_).
- *
- * @return frame id of the evicted frame, or std::nullopt if cannot evict
  */
-auto ArcReplacer::Evict() -> std::optional<frame_id_t> { return std::nullopt; }
+auto ArcReplacer::Evict() -> std::optional<frame_id_t> {
+  std::lock_guard<std::mutex> lock(latch_);
+  if (curr_size_ == 0) {
+    return std::nullopt;
+  }
+
+  bool prefer_mru = !mru_.empty() && (mru_.size() >= mru_target_size_);
+  frame_id_t victim_fid = -1;
+  bool evicted_from_mru = false;
+
+  if (prefer_mru) {
+    for (auto it = mru_.rbegin(); it != mru_.rend(); ++it) {
+      if (alive_map_[*it]->evictable_) {
+        victim_fid = *it;
+        evicted_from_mru = true;
+        break;
+      }
+    }
+    if (victim_fid == -1) {
+      for (auto it = mfu_.rbegin(); it != mfu_.rend(); ++it) {
+        if (alive_map_[*it]->evictable_) {
+          victim_fid = *it;
+          evicted_from_mru = false;
+          break;
+        }
+      }
+    }
+  } else {
+    for (auto it = mfu_.rbegin(); it != mfu_.rend(); ++it) {
+      if (alive_map_[*it]->evictable_) {
+        victim_fid = *it;
+        evicted_from_mru = false;
+        break;
+      }
+    }
+    if (victim_fid == -1) {
+      for (auto it = mru_.rbegin(); it != mru_.rend(); ++it) {
+        if (alive_map_[*it]->evictable_) {
+          victim_fid = *it;
+          evicted_from_mru = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (victim_fid != -1) {
+    auto status = alive_map_[victim_fid];
+    page_id_t pid = status->page_id_;
+
+    if (evicted_from_mru) {
+      mru_.erase(status->alive_it_); // O(1) 擦除
+      mru_ghost_.push_front(pid);
+      status->ghost_it_ = mru_ghost_.begin(); // 记录 Ghost 迭代器
+      status->arc_status_ = ArcStatus::MRU_GHOST;
+    } else {
+      mfu_.erase(status->alive_it_); // O(1) 擦除
+      mfu_ghost_.push_front(pid);
+      status->ghost_it_ = mfu_ghost_.begin(); // 记录 Ghost 迭代器
+      status->arc_status_ = ArcStatus::MFU_GHOST;
+    }
+
+    alive_map_.erase(victim_fid);
+    ghost_map_[pid] = status;
+    curr_size_--;
+
+    return victim_fid;
+  }
+
+  return std::nullopt;
+}
 
 /**
- * TODO(P1): Add implementation
- *
  * @brief Record access to a frame, adjusting ARC bookkeeping accordingly
- * by bring the accessed page to the front of mfu_ if it exists in any of the lists
- * or the front of mru_ if it does not.
- *
- * Performs the operations EXCEPT REPLACE described in original paper, which is
- * handled by `Evict()`.
- *
- * Consider the following four cases, handle accordingly:
- * 1. Access hits mru_ or mfu_
- * 2/3. Access hits mru_ghost_ / mfu_ghost_
- * 4. Access misses all the lists
- *
- * This routine performs all changes to the four lists as preperation
- * for `Evict()` to simply find and evict a victim into ghost lists.
- *
- * Note that frame_id is used as identifier for alive pages and
- * page_id is used as identifier for the ghost pages, since page_id is
- * the unique identifier to the page after it's dead.
- * Using page_id for alive pages should be the same since it's one to one mapping,
- * but using frame_id is slightly more intuitive.
- *
- * @param frame_id id of frame that received a new access.
- * @param page_id id of page that is mapped to the frame.
- * @param access_type type of access that was received. This parameter is only needed for
- * leaderboard tests.
  */
-void ArcReplacer::RecordAccess(frame_id_t frame_id, page_id_t page_id, [[maybe_unused]] AccessType access_type) {}
+void ArcReplacer::RecordAccess(frame_id_t frame_id, page_id_t page_id, [[maybe_unused]] AccessType access_type) {
+  std::lock_guard<std::mutex> lock(latch_);
+
+  if (frame_id < 0) {
+    throw std::invalid_argument("Invalid frame_id in RecordAccess");
+  }
+
+  // Case 1: 内存命中 (Hits in MRU or MFU)
+  auto alive_iter = alive_map_.find(frame_id);
+  if (alive_iter != alive_map_.end()) {
+    auto status = alive_iter->second;
+    status->page_id_ = page_id; // 更新映射
+
+    if (status->arc_status_ == ArcStatus::MRU) {
+      mru_.erase(status->alive_it_); // O(1) 擦除
+      mfu_.push_front(frame_id);
+      status->alive_it_ = mfu_.begin(); // 记录新迭代器
+      status->arc_status_ = ArcStatus::MFU;
+    } else if (status->arc_status_ == ArcStatus::MFU) {
+      mfu_.erase(status->alive_it_); // O(1) 擦除
+      mfu_.push_front(frame_id);
+      status->alive_it_ = mfu_.begin(); // 记录新迭代器
+    }
+    return;
+  }
+
+  // Case 2 & 3: 幽灵命中 (Hits in Ghost Lists)
+  auto ghost_iter = ghost_map_.find(page_id);
+  if (ghost_iter != ghost_map_.end()) {
+    auto status = ghost_iter->second;
+
+    if (status->arc_status_ == ArcStatus::MRU_GHOST) {
+      // Case 2: Hit in mru_ghost_ (B1)
+      size_t d = 1;
+      if (mru_ghost_.size() < mfu_ghost_.size()) {
+        d = mfu_ghost_.size() / mru_ghost_.size();
+      }
+      mru_target_size_ = std::min(replacer_size_, mru_target_size_ + d);
+
+      mru_ghost_.erase(status->ghost_it_); // O(1) 擦除
+    } else if (status->arc_status_ == ArcStatus::MFU_GHOST) {
+      // Case 3: Hit in mfu_ghost_ (B2)
+      size_t d = 1;
+      if (mfu_ghost_.size() < mru_ghost_.size()) {
+        d = mru_ghost_.size() / mfu_ghost_.size();
+      }
+      mru_target_size_ = (mru_target_size_ > d) ? (mru_target_size_ - d) : 0;
+
+      mfu_ghost_.erase(status->ghost_it_); // O(1) 擦除
+    }
+
+    // 从幽灵列表中复活，移入 MFU
+    ghost_map_.erase(ghost_iter);
+    mfu_.push_front(frame_id);
+    
+    status->frame_id_ = frame_id;
+    status->arc_status_ = ArcStatus::MFU;
+    status->evictable_ = false; // 新移入页面默认锁定
+    status->alive_it_ = mfu_.begin(); // 记录新迭代器
+    alive_map_[frame_id] = status;
+    return;
+  }
+
+  // Case 4: 全新未命中 (Misses all lists)
+  if (mru_.size() + mru_ghost_.size() == replacer_size_) {
+    if (!mru_ghost_.empty()) {
+      page_id_t victim_page = mru_ghost_.back();
+      mru_ghost_.pop_back();
+      ghost_map_.erase(victim_page);
+    }
+  } else if (mru_.size() + mru_ghost_.size() < replacer_size_) {
+    size_t total_size = mru_.size() + mfu_.size() + mru_ghost_.size() + mfu_ghost_.size();
+    if (total_size == 2 * replacer_size_) {
+      if (!mfu_ghost_.empty()) {
+        page_id_t victim_page = mfu_ghost_.back();
+        mfu_ghost_.pop_back();
+        ghost_map_.erase(victim_page);
+      }
+    }
+  }
+
+  mru_.push_front(frame_id);
+  auto new_status = std::make_shared<FrameStatus>(page_id, frame_id, false, ArcStatus::MRU);
+  new_status->alive_it_ = mru_.begin(); // 记录迭代器
+  alive_map_[frame_id] = new_status;
+}
 
 /**
- * TODO(P1): Add implementation
- *
- * @brief Toggle whether a frame is evictable or non-evictable. This function also
- * controls replacer's size. Note that size is equal to number of evictable entries.
- *
- * If a frame was previously evictable and is to be set to non-evictable, then size should
- * decrement. If a frame was previously non-evictable and is to be set to evictable,
- * then size should increment.
- *
- * If frame id is invalid, throw an exception or abort the process.
- *
- * For other scenarios, this function should terminate without modifying anything.
- *
- * @param frame_id id of frame whose 'evictable' status will be modified
- * @param set_evictable whether the given frame is evictable or not
+ * @brief Toggle whether a frame is evictable or non-evictable.
  */
-void ArcReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {}
+void ArcReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
+  std::lock_guard<std::mutex> lock(latch_);
+
+  if (frame_id < 0) {
+    throw std::invalid_argument("Invalid frame_id in SetEvictable");
+  }
+
+  auto iter = alive_map_.find(frame_id);
+  if (iter == alive_map_.end()) {
+    return;
+  }
+
+  if (iter->second->evictable_ != set_evictable) {
+    iter->second->evictable_ = set_evictable;
+    if (set_evictable) {
+      curr_size_++;
+    } else {
+      curr_size_--;
+    }
+  }
+}
 
 /**
- * TODO(P1): Add implementation
- *
  * @brief Remove an evictable frame from replacer.
- * This function should also decrement replacer's size if removal is successful.
- *
- * Note that this is different from evicting a frame, which always remove the frame
- * decided by the ARC algorithm.
- *
- * If Remove is called on a non-evictable frame, throw an exception or abort the
- * process.
- *
- * If specified frame is not found, directly return from this function.
- *
- * @param frame_id id of frame to be removed
  */
-void ArcReplacer::Remove(frame_id_t frame_id) {}
+void ArcReplacer::Remove(frame_id_t frame_id) {
+  std::lock_guard<std::mutex> lock(latch_);
+
+  if (frame_id < 0) {
+    throw std::invalid_argument("Invalid frame_id in Remove");
+  }
+
+  auto iter = alive_map_.find(frame_id);
+  if (iter == alive_map_.end()) {
+    return; 
+  }
+
+  if (!iter->second->evictable_) {
+    throw std::runtime_error("Attempted to remove a non-evictable frame");
+  }
+
+  curr_size_--;
+  if (iter->second->arc_status_ == ArcStatus::MRU) {
+    mru_.erase(iter->second->alive_it_); // O(1) 擦除
+  } else if (iter->second->arc_status_ == ArcStatus::MFU) {
+    mfu_.erase(iter->second->alive_it_); // O(1) 擦除
+  }
+  alive_map_.erase(iter);
+}
 
 /**
- * TODO(P1): Add implementation
- *
  * @brief Return replacer's size, which tracks the number of evictable frames.
- *
- * @return size_t
  */
-auto ArcReplacer::Size() -> size_t { return 0; }
+auto ArcReplacer::Size() -> size_t {
+  std::lock_guard<std::mutex> lock(latch_);
+  return curr_size_;
+}
 
 }  // namespace bustub
