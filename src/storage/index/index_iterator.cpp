@@ -19,26 +19,64 @@
 
 namespace bustub {
 
-/**
- * @note you can change the destructor/constructor method here
- * set your own input parameters
- */
 FULL_INDEX_TEMPLATE_ARGUMENTS
 INDEXITERATOR_TYPE::IndexIterator() = default;
+
+FULL_INDEX_TEMPLATE_ARGUMENTS
+INDEXITERATOR_TYPE::IndexIterator(std::shared_ptr<TracedBufferPoolManager> bpm, ReadPageGuard guard, int index)
+    : bpm_(std::move(bpm)), guard_(std::move(guard)), index_(index) {
+  if (guard_.GetPageId() != INVALID_PAGE_ID) {
+    page_id_ = guard_.GetPageId();
+  }
+  AdvanceToNextValid();
+}
 
 FULL_INDEX_TEMPLATE_ARGUMENTS
 INDEXITERATOR_TYPE::~IndexIterator() = default;  // NOLINT
 
 FULL_INDEX_TEMPLATE_ARGUMENTS
-auto INDEXITERATOR_TYPE::IsEnd() -> bool { UNIMPLEMENTED("TODO(P2): Add implementation."); }
-
-FULL_INDEX_TEMPLATE_ARGUMENTS
-auto INDEXITERATOR_TYPE::operator*() -> std::pair<const KeyType &, const ValueType &> {
-  UNIMPLEMENTED("TODO(P2): Add implementation.");
+auto INDEXITERATOR_TYPE::IsEnd() -> bool { 
+  return page_id_ == INVALID_PAGE_ID; 
 }
 
 FULL_INDEX_TEMPLATE_ARGUMENTS
-auto INDEXITERATOR_TYPE::operator++() -> INDEXITERATOR_TYPE & { UNIMPLEMENTED("TODO(P2): Add implementation."); }
+auto INDEXITERATOR_TYPE::operator*() -> std::pair<const KeyType &, const ValueType &> {
+  return {curr_val_.first, curr_val_.second};
+}
+
+FULL_INDEX_TEMPLATE_ARGUMENTS
+auto INDEXITERATOR_TYPE::operator++() -> INDEXITERATOR_TYPE & {
+  index_++;
+  AdvanceToNextValid();
+  return *this;
+}
+
+FULL_INDEX_TEMPLATE_ARGUMENTS
+void INDEXITERATOR_TYPE::AdvanceToNextValid() {
+  while (true) {
+    if (page_id_ == INVALID_PAGE_ID) {
+      return;
+    }
+    auto leaf = guard_.template As<BPlusTreeLeafPage<KeyType, ValueType, KeyComparator, NumTombs>>();
+    while (index_ < leaf->GetSize()) {
+      if (!leaf->IsTombstoned(index_)) {
+        curr_val_ = {leaf->KeyAt(index_), leaf->ValueAt(index_)};
+        return;
+      }
+      index_++;
+    }
+    page_id_t next_page_id = leaf->GetNextPageId();
+    if (next_page_id == INVALID_PAGE_ID) {
+      guard_ = ReadPageGuard(); 
+      page_id_ = INVALID_PAGE_ID;
+      index_ = -1;
+      return;
+    }
+    guard_ = bpm_->ReadPage(next_page_id);
+    page_id_ = next_page_id;
+    index_ = 0;
+  }
+}
 
 template class IndexIterator<GenericKey<4>, RID, GenericComparator<4>>;
 

@@ -31,6 +31,7 @@ class IndexIterator {
  public:
   // you may define your own constructor based on your member variables
   IndexIterator();
+  IndexIterator(std::shared_ptr<TracedBufferPoolManager> bpm, ReadPageGuard guard, int index);
   ~IndexIterator();  // NOLINT
 
   auto IsEnd() -> bool;
@@ -39,12 +40,26 @@ class IndexIterator {
 
   auto operator++() -> IndexIterator &;
 
-  auto operator==(const IndexIterator &itr) const -> bool { UNIMPLEMENTED("TODO(P2): Add implementation."); }
+  auto operator==(const IndexIterator &itr) const -> bool {
+    // 关键修复：直接比对 page_id_ 成员，避免对无效 guard 触发异常
+    if (page_id_ == INVALID_PAGE_ID && itr.page_id_ == INVALID_PAGE_ID) {
+      return true;
+    }
+    return page_id_ == itr.page_id_ && index_ == itr.index_;
+  }
 
-  auto operator!=(const IndexIterator &itr) const -> bool { UNIMPLEMENTED("TODO(P2): Add implementation."); }
+  auto operator!=(const IndexIterator &itr) const -> bool {
+    return !(*this == itr);
+  }
 
  private:
-  // add your own private member variables here
+  std::shared_ptr<TracedBufferPoolManager> bpm_{nullptr};
+  ReadPageGuard guard_;
+  page_id_t page_id_{INVALID_PAGE_ID}; // 记录 page_id
+  int index_{-1};
+  std::pair<KeyType, ValueType> curr_val_;
+
+  void AdvanceToNextValid();
 };
 
 }  // namespace bustub
