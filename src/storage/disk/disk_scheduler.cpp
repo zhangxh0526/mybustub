@@ -53,14 +53,14 @@ void DiskScheduler::StartWorkerThread() {
     if (!request_opt.has_value()) {
       break;
     }
-    
+
     auto &request = *request_opt;
     if (request.is_write_) {
       disk_manager_->WritePage(request.page_id_, request.data_);
     } else {
       disk_manager_->ReadPage(request.page_id_, request.data_);
     }
-    
+
     // Signal to the request issuer that the request has been completed.
     request.callback_.set_value(true);
   }

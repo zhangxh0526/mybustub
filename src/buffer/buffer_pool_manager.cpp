@@ -83,7 +83,7 @@ auto BufferPoolManager::Size() const -> size_t { return num_frames_; }
  */
 auto BufferPoolManager::NewPage() -> page_id_t {
   std::scoped_lock<std::mutex> lock(*bpm_latch_);
-  
+
   frame_id_t frame_id = -1;
   if (!free_frames_.empty()) {
     frame_id = free_frames_.front();
@@ -95,7 +95,7 @@ auto BufferPoolManager::NewPage() -> page_id_t {
       return INVALID_PAGE_ID;
     }
     frame_id = evict_opt.value();
-    
+
     auto evicted_frame = frames_[frame_id];
     page_id_t evicted_page_id = INVALID_PAGE_ID;
     for (const auto &[pid, fid] : page_table_) {
@@ -118,20 +118,28 @@ auto BufferPoolManager::NewPage() -> page_id_t {
       page_table_.erase(evicted_page_id);
     }
   }
-  
+
   page_id_t new_page_id = next_page_id_.fetch_add(1);
-  
+
   auto frame = frames_[frame_id];
   frame->Reset();
-  
+
   page_table_[new_page_id] = frame_id;
   // 重要修改：通过 NewPage 分配的页在没有 Guard 保护前，pin_count 应该初始化为 0，并且设为可驱逐 [1]
   frame->pin_count_ = 0;
   frame->is_dirty_ = false;
-  
+
+  auto promise = disk_scheduler_->CreatePromise();
+  auto future = promise.get_future();
+  DiskRequest req{true, frame->GetDataMut(), new_page_id, std::move(promise)};
+  std::vector<DiskRequest> reqs;
+  reqs.push_back(std::move(req));
+  disk_scheduler_->Schedule(reqs);
+  future.get();
+
   replacer_->RecordAccess(frame_id, new_page_id);
   replacer_->SetEvictable(frame_id, true);
-  
+
   return new_page_id;
 }
 
@@ -144,19 +152,19 @@ auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool {
   }
 
   std::scoped_lock<std::mutex> lock(*bpm_latch_);
-  
+
   auto iter = page_table_.find(page_id);
   if (iter == page_table_.end()) {
-    return true; // 缓存未命中，视为删除成功
+    return true;  // 缓存未命中，视为删除成功
   }
-  
+
   frame_id_t frame_id = iter->second;
   auto frame = frames_[frame_id];
-  
+
   if (frame->pin_count_ > 0) {
-    return false; // 当前页正被引用，无法删除
+    return false;  // 当前页正被引用，无法删除
   }
-  
+
   if (frame->is_dirty_) {
     auto promise = disk_scheduler_->CreatePromise();
     auto future = promise.get_future();
@@ -167,14 +175,14 @@ auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool {
     future.get();
     frame->is_dirty_ = false;
   }
-  
+
   page_table_.erase(iter);
   replacer_->Remove(frame_id);
   frame->Reset();
   free_frames_.push_back(frame_id);
-  
+
   disk_scheduler_->DeallocatePage(page_id);
-  
+
   return true;
 }
 
@@ -194,6 +202,7 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
       frame_id_t frame_id = iter->second;
       frame = frames_[frame_id];
       frame->pin_count_++;
+      // frame->is_dirty_ = true;
       replacer_->RecordAccess(frame_id, page_id);
       replacer_->SetEvictable(frame_id, false);
     } else {
@@ -208,7 +217,7 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
           return std::nullopt;
         }
         frame_id = evict_opt.value();
-        
+
         auto evicted_frame = frames_[frame_id];
         page_id_t evicted_page_id = INVALID_PAGE_ID;
         for (const auto &[pid, fid] : page_table_) {
@@ -231,10 +240,10 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
           page_table_.erase(evicted_page_id);
         }
       }
-      
+
       frame = frames_[frame_id];
       frame->Reset();
-      
+
       // 发送读请求，将磁盘数据加载进物理帧中
       auto promise = disk_scheduler_->CreatePromise();
       auto future = promise.get_future();
@@ -243,7 +252,7 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
       reqs.push_back(std::move(req));
       disk_scheduler_->Schedule(reqs);
       future.get();
-      
+
       page_table_[page_id] = frame_id;
       frame->pin_count_ = 1;
       frame->is_dirty_ = false;
@@ -251,7 +260,7 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
       replacer_->SetEvictable(frame_id, false);
     }
   }
-  
+
   return WritePageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
 }
 
@@ -285,7 +294,7 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
           return std::nullopt;
         }
         frame_id = evict_opt.value();
-        
+
         auto evicted_frame = frames_[frame_id];
         page_id_t evicted_page_id = INVALID_PAGE_ID;
         for (const auto &[pid, fid] : page_table_) {
@@ -308,10 +317,10 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
           page_table_.erase(evicted_page_id);
         }
       }
-      
+
       frame = frames_[frame_id];
       frame->Reset();
-      
+
       // 加载页面数据到内存
       auto promise = disk_scheduler_->CreatePromise();
       auto future = promise.get_future();
@@ -320,7 +329,7 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
       reqs.push_back(std::move(req));
       disk_scheduler_->Schedule(reqs);
       future.get();
-      
+
       page_table_[page_id] = frame_id;
       frame->pin_count_ = 1;
       frame->is_dirty_ = false;
@@ -328,7 +337,7 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
       replacer_->SetEvictable(frame_id, false);
     }
   }
-  
+
   return ReadPageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
 }
 
@@ -372,21 +381,19 @@ auto BufferPoolManager::FlushPageUnsafe(page_id_t page_id) -> bool {
   if (iter == page_table_.end()) {
     return false;
   }
-  
+
   frame_id_t frame_id = iter->second;
   auto frame = frames_[frame_id];
-  
-  if (frame->is_dirty_) {
-    auto promise = disk_scheduler_->CreatePromise();
-    auto future = promise.get_future();
-    DiskRequest req{true, frame->GetDataMut(), page_id, std::move(promise)};
-    std::vector<DiskRequest> reqs;
-    reqs.push_back(std::move(req));
-    disk_scheduler_->Schedule(reqs);
-    future.get();
-    
-    frame->is_dirty_ = false;
-  }
+
+  auto promise = disk_scheduler_->CreatePromise();
+  auto future = promise.get_future();
+  DiskRequest req{true, frame->GetDataMut(), page_id, std::move(promise)};
+  std::vector<DiskRequest> reqs;
+  reqs.push_back(std::move(req));
+  disk_scheduler_->Schedule(reqs);
+  future.get();
+
+  frame->is_dirty_ = false;
   return true;
 }
 
@@ -407,28 +414,26 @@ auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
     }
     frame = frames_[iter->second];
   }
-  
+
   // 1. 先安全加页独占锁
   std::unique_lock<std::shared_mutex> page_lock(frame->rwlatch_);
-  
+
   // 2. 然后加全局锁做元数据二次检验与物理刷盘
   std::scoped_lock<std::mutex> lock(*bpm_latch_);
   auto iter = page_table_.find(page_id);
   if (iter == page_table_.end() || frames_[iter->second] != frame) {
     return false;
   }
-  
-  if (frame->is_dirty_) {
-    auto promise = disk_scheduler_->CreatePromise();
-    auto future = promise.get_future();
-    DiskRequest req{true, frame->GetDataMut(), page_id, std::move(promise)};
-    std::vector<DiskRequest> reqs;
-    reqs.push_back(std::move(req));
-    disk_scheduler_->Schedule(reqs);
-    future.get();
-    
-    frame->is_dirty_ = false;
-  }
+
+  auto promise = disk_scheduler_->CreatePromise();
+  auto future = promise.get_future();
+  DiskRequest req{true, frame->GetDataMut(), page_id, std::move(promise)};
+  std::vector<DiskRequest> reqs;
+  reqs.push_back(std::move(req));
+  disk_scheduler_->Schedule(reqs);
+  future.get();
+
+  frame->is_dirty_ = false;
   return true;
 }
 
@@ -438,17 +443,15 @@ auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
 void BufferPoolManager::FlushAllPagesUnsafe() {
   for (const auto &[page_id, frame_id] : page_table_) {
     auto frame = frames_[frame_id];
-    if (frame->is_dirty_) {
-      auto promise = disk_scheduler_->CreatePromise();
-      auto future = promise.get_future();
-      DiskRequest req{true, frame->GetDataMut(), page_id, std::move(promise)};
-      std::vector<DiskRequest> reqs;
-      reqs.push_back(std::move(req));
-      disk_scheduler_->Schedule(reqs);
-      future.get();
-      
-      frame->is_dirty_ = false;
-    }
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+    DiskRequest req{true, frame->GetDataMut(), page_id, std::move(promise)};
+    std::vector<DiskRequest> reqs;
+    reqs.push_back(std::move(req));
+    disk_scheduler_->Schedule(reqs);
+    future.get();
+
+    frame->is_dirty_ = false;
   }
 }
 
@@ -463,25 +466,23 @@ void BufferPoolManager::FlushAllPages() {
       active_pages.emplace_back(page_id, frames_[frame_id]);
     }
   }
-  
+
   // 按照无死锁的方式对每页进行序列化安全刷盘
   for (const auto &[page_id, frame] : active_pages) {
     std::unique_lock<std::shared_mutex> page_lock(frame->rwlatch_);
     std::scoped_lock<std::mutex> lock(*bpm_latch_);
-    
+
     auto iter = page_table_.find(page_id);
     if (iter != page_table_.end() && frames_[iter->second] == frame) {
-      if (frame->is_dirty_) {
-        auto promise = disk_scheduler_->CreatePromise();
-        auto future = promise.get_future();
-        DiskRequest req{true, frame->GetDataMut(), page_id, std::move(promise)};
-        std::vector<DiskRequest> reqs;
-        reqs.push_back(std::move(req));
-        disk_scheduler_->Schedule(reqs);
-        future.get();
-        
-        frame->is_dirty_ = false;
-      }
+      auto promise = disk_scheduler_->CreatePromise();
+      auto future = promise.get_future();
+      DiskRequest req{true, frame->GetDataMut(), page_id, std::move(promise)};
+      std::vector<DiskRequest> reqs;
+      reqs.push_back(std::move(req));
+      disk_scheduler_->Schedule(reqs);
+      future.get();
+
+      frame->is_dirty_ = false;
     }
   }
 }

@@ -12,9 +12,11 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <thread>
 
 #include "buffer/buffer_pool_manager.h"
 #include "gtest/gtest.h"
+#include "storage/disk/disk_manager_memory.h"
 #include "storage/page/page_guard.h"
 
 namespace bustub {
@@ -58,6 +60,112 @@ TEST(BufferPoolManagerTest, VeryBasicTest) {
   }
 
   ASSERT_TRUE(bpm->DeletePage(pid));
+}
+
+TEST(BufferPoolManagerTest, FlushCleanPageUsesSchedulerTest) {
+  auto disk_manager = std::make_shared<DiskManagerUnlimitedMemory>();
+  auto bpm = std::make_shared<BufferPoolManager>(FRAMES, disk_manager.get());
+
+  const page_id_t pid = bpm->NewPage();
+  ASSERT_TRUE(bpm->FlushPage(pid));
+
+  auto io_thread = disk_manager->GetLastReadThreadAndClear();
+  ASSERT_TRUE(io_thread.has_value());
+  EXPECT_NE(io_thread.value(), std::this_thread::get_id());
+}
+
+TEST(BufferPoolManagerTest, WriteGuardFlushClearsDirtyTest) {
+  auto disk_manager = std::make_shared<DiskManagerUnlimitedMemory>();
+  auto bpm = std::make_shared<BufferPoolManager>(FRAMES, disk_manager.get());
+
+  const page_id_t pid = bpm->NewPage();
+  auto guard = bpm->WritePage(pid);
+  CopyString(guard.GetDataMut(), "dirty page");
+  ASSERT_TRUE(guard.IsDirty());
+
+  guard.Flush();
+  EXPECT_FALSE(guard.IsDirty());
+}
+
+TEST(BufferPoolManagerTest, DeleteDirtyPageUsesSchedulerTest) {
+  auto disk_manager = std::make_shared<DiskManagerUnlimitedMemory>();
+  auto bpm = std::make_shared<BufferPoolManager>(FRAMES, disk_manager.get());
+
+  const page_id_t pid = bpm->NewPage();
+  {
+    auto guard = bpm->WritePage(pid);
+    CopyString(guard.GetDataMut(), "delete dirty page");
+  }
+
+  ASSERT_TRUE(bpm->DeletePage(pid));
+
+  auto io_thread = disk_manager->GetLastReadThreadAndClear();
+  ASSERT_TRUE(io_thread.has_value());
+  EXPECT_NE(io_thread.value(), std::this_thread::get_id());
+}
+
+TEST(BufferPoolManagerTest, NewPageUsesSchedulerTest) {
+  auto disk_manager = std::make_shared<DiskManagerUnlimitedMemory>();
+  auto bpm = std::make_shared<BufferPoolManager>(FRAMES, disk_manager.get());
+
+  const page_id_t pid = bpm->NewPage();
+  ASSERT_NE(pid, INVALID_PAGE_ID);
+
+  auto io_thread = disk_manager->GetLastReadThreadAndClear();
+  ASSERT_TRUE(io_thread.has_value());
+  EXPECT_NE(io_thread.value(), std::this_thread::get_id());
+}
+
+TEST(BufferPoolManagerTest, GuardFlushAndFlushAllUseSchedulerTest) {
+  auto disk_manager = std::make_shared<DiskManagerUnlimitedMemory>();
+  auto bpm = std::make_shared<BufferPoolManager>(FRAMES, disk_manager.get());
+
+  const page_id_t pid = bpm->NewPage();
+  {
+    auto read_guard = bpm->ReadPage(pid);
+    read_guard.Flush();
+  }
+  auto io_thread = disk_manager->GetLastReadThreadAndClear();
+  ASSERT_TRUE(io_thread.has_value());
+  EXPECT_NE(io_thread.value(), std::this_thread::get_id());
+
+  {
+    auto write_guard = bpm->WritePage(pid);
+    write_guard.Flush();
+  }
+  io_thread = disk_manager->GetLastReadThreadAndClear();
+  ASSERT_TRUE(io_thread.has_value());
+  EXPECT_NE(io_thread.value(), std::this_thread::get_id());
+
+  bpm->FlushAllPages();
+  io_thread = disk_manager->GetLastReadThreadAndClear();
+  ASSERT_TRUE(io_thread.has_value());
+  EXPECT_NE(io_thread.value(), std::this_thread::get_id());
+}
+
+TEST(BufferPoolManagerTest, EvictionReadWriteUseSchedulerTest) {
+  auto disk_manager = std::make_shared<DiskManagerUnlimitedMemory>();
+  auto bpm = std::make_shared<BufferPoolManager>(1, disk_manager.get());
+
+  const page_id_t pid0 = bpm->NewPage();
+  {
+    auto guard = bpm->WritePage(pid0);
+    CopyString(guard.GetDataMut(), "evict me");
+  }
+
+  const page_id_t pid1 = bpm->NewPage();
+  ASSERT_NE(pid1, INVALID_PAGE_ID);
+  auto io_thread = disk_manager->GetLastReadThreadAndClear();
+  ASSERT_TRUE(io_thread.has_value());
+  EXPECT_NE(io_thread.value(), std::this_thread::get_id());
+
+  {
+    auto guard = bpm->ReadPage(pid0);
+    EXPECT_STREQ(guard.GetData(), "evict me");
+  }
+  io_thread = disk_manager->GetLastReadThreadAndClear();
+  ASSERT_TRUE(io_thread.has_value());
+  EXPECT_NE(io_thread.value(), std::this_thread::get_id());
 }
 
 TEST(BufferPoolManagerTest, PagePinEasyTest) {

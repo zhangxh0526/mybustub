@@ -11,8 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "buffer/arc_replacer.h"
-#include <optional>
 #include <algorithm>
+#include <optional>
 #include <stdexcept>
 #include "common/config.h"
 
@@ -80,14 +80,14 @@ auto ArcReplacer::Evict() -> std::optional<frame_id_t> {
     page_id_t pid = status->page_id_;
 
     if (evicted_from_mru) {
-      mru_.erase(status->alive_it_); // O(1) 擦除
+      mru_.erase(status->alive_it_);  // O(1) 擦除
       mru_ghost_.push_front(pid);
-      status->ghost_it_ = mru_ghost_.begin(); // 记录 Ghost 迭代器
+      status->ghost_it_ = mru_ghost_.begin();  // 记录 Ghost 迭代器
       status->arc_status_ = ArcStatus::MRU_GHOST;
     } else {
-      mfu_.erase(status->alive_it_); // O(1) 擦除
+      mfu_.erase(status->alive_it_);  // O(1) 擦除
       mfu_ghost_.push_front(pid);
-      status->ghost_it_ = mfu_ghost_.begin(); // 记录 Ghost 迭代器
+      status->ghost_it_ = mfu_ghost_.begin();  // 记录 Ghost 迭代器
       status->arc_status_ = ArcStatus::MFU_GHOST;
     }
 
@@ -115,17 +115,17 @@ void ArcReplacer::RecordAccess(frame_id_t frame_id, page_id_t page_id, [[maybe_u
   auto alive_iter = alive_map_.find(frame_id);
   if (alive_iter != alive_map_.end()) {
     auto status = alive_iter->second;
-    status->page_id_ = page_id; // 更新映射
+    status->page_id_ = page_id;  // 更新映射
 
     if (status->arc_status_ == ArcStatus::MRU) {
-      mru_.erase(status->alive_it_); // O(1) 擦除
+      mru_.erase(status->alive_it_);  // O(1) 擦除
       mfu_.push_front(frame_id);
-      status->alive_it_ = mfu_.begin(); // 记录新迭代器
+      status->alive_it_ = mfu_.begin();  // 记录新迭代器
       status->arc_status_ = ArcStatus::MFU;
     } else if (status->arc_status_ == ArcStatus::MFU) {
-      mfu_.erase(status->alive_it_); // O(1) 擦除
+      mfu_.erase(status->alive_it_);  // O(1) 擦除
       mfu_.push_front(frame_id);
-      status->alive_it_ = mfu_.begin(); // 记录新迭代器
+      status->alive_it_ = mfu_.begin();  // 记录新迭代器
     }
     return;
   }
@@ -143,7 +143,7 @@ void ArcReplacer::RecordAccess(frame_id_t frame_id, page_id_t page_id, [[maybe_u
       }
       mru_target_size_ = std::min(replacer_size_, mru_target_size_ + d);
 
-      mru_ghost_.erase(status->ghost_it_); // O(1) 擦除
+      mru_ghost_.erase(status->ghost_it_);  // O(1) 擦除
     } else if (status->arc_status_ == ArcStatus::MFU_GHOST) {
       // Case 3: Hit in mfu_ghost_ (B2)
       size_t d = 1;
@@ -152,17 +152,17 @@ void ArcReplacer::RecordAccess(frame_id_t frame_id, page_id_t page_id, [[maybe_u
       }
       mru_target_size_ = (mru_target_size_ > d) ? (mru_target_size_ - d) : 0;
 
-      mfu_ghost_.erase(status->ghost_it_); // O(1) 擦除
+      mfu_ghost_.erase(status->ghost_it_);  // O(1) 擦除
     }
 
     // 从幽灵列表中复活，移入 MFU
     ghost_map_.erase(ghost_iter);
     mfu_.push_front(frame_id);
-    
+
     status->frame_id_ = frame_id;
     status->arc_status_ = ArcStatus::MFU;
-    status->evictable_ = false; // 新移入页面默认锁定
-    status->alive_it_ = mfu_.begin(); // 记录新迭代器
+    status->evictable_ = false;        // 新移入页面默认锁定
+    status->alive_it_ = mfu_.begin();  // 记录新迭代器
     alive_map_[frame_id] = status;
     return;
   }
@@ -187,7 +187,7 @@ void ArcReplacer::RecordAccess(frame_id_t frame_id, page_id_t page_id, [[maybe_u
 
   mru_.push_front(frame_id);
   auto new_status = std::make_shared<FrameStatus>(page_id, frame_id, false, ArcStatus::MRU);
-  new_status->alive_it_ = mru_.begin(); // 记录迭代器
+  new_status->alive_it_ = mru_.begin();  // 记录迭代器
   alive_map_[frame_id] = new_status;
 }
 
@@ -228,7 +228,7 @@ void ArcReplacer::Remove(frame_id_t frame_id) {
 
   auto iter = alive_map_.find(frame_id);
   if (iter == alive_map_.end()) {
-    return; 
+    return;
   }
 
   if (!iter->second->evictable_) {
@@ -237,9 +237,9 @@ void ArcReplacer::Remove(frame_id_t frame_id) {
 
   curr_size_--;
   if (iter->second->arc_status_ == ArcStatus::MRU) {
-    mru_.erase(iter->second->alive_it_); // O(1) 擦除
+    mru_.erase(iter->second->alive_it_);  // O(1) 擦除
   } else if (iter->second->arc_status_ == ArcStatus::MFU) {
-    mfu_.erase(iter->second->alive_it_); // O(1) 擦除
+    mfu_.erase(iter->second->alive_it_);  // O(1) 擦除
   }
   alive_map_.erase(iter);
 }

@@ -57,15 +57,15 @@ ReadPageGuard::ReadPageGuard(ReadPageGuard &&that) noexcept
  */
 auto ReadPageGuard::operator=(ReadPageGuard &&that) noexcept -> ReadPageGuard & {
   if (this != &that) {
-    Drop(); // 释放自身原先占有的资源
-    
+    Drop();  // 释放自身原先占有的资源
+
     page_id_ = that.page_id_;
     frame_ = std::move(that.frame_);
     replacer_ = std::move(that.replacer_);
     bpm_latch_ = std::move(that.bpm_latch_);
     disk_scheduler_ = std::move(that.disk_scheduler_);
     is_valid_ = that.is_valid_;
-    
+
     that.is_valid_ = false;
     that.page_id_ = INVALID_PAGE_ID;
     that.frame_ = nullptr;
@@ -107,19 +107,17 @@ void ReadPageGuard::Flush() {
   if (!is_valid_) {
     return;
   }
-  if (frame_->is_dirty_) {
-    auto promise = disk_scheduler_->CreatePromise();
-    auto future = promise.get_future();
-    
-    DiskRequest req{true, frame_->GetDataMut(), page_id_, std::move(promise)};
-    std::vector<DiskRequest> reqs;
-    reqs.push_back(std::move(req));
-    disk_scheduler_->Schedule(reqs);
-    future.get();
-    
-    std::scoped_lock<std::mutex> lock(*bpm_latch_);
-    frame_->is_dirty_ = false;
-  }
+  auto promise = disk_scheduler_->CreatePromise();
+  auto future = promise.get_future();
+
+  DiskRequest req{true, frame_->GetDataMut(), page_id_, std::move(promise)};
+  std::vector<DiskRequest> reqs;
+  reqs.push_back(std::move(req));
+  disk_scheduler_->Schedule(reqs);
+  future.get();
+
+  std::scoped_lock<std::mutex> lock(*bpm_latch_);
+  frame_->is_dirty_ = false;
 }
 
 /**
@@ -129,10 +127,10 @@ void ReadPageGuard::Drop() {
   if (!is_valid_) {
     return;
   }
-  
+
   // 1. 先安全地释放页锁，打破交叉死锁环
   frame_->rwlatch_.unlock_shared();
-  
+
   // 2. 然后获取全局缓冲池锁，修改页元数据和置换器
   {
     std::scoped_lock<std::mutex> lock(*bpm_latch_);
@@ -141,7 +139,7 @@ void ReadPageGuard::Drop() {
       replacer_->SetEvictable(frame_->frame_id_, true);
     }
   }
-  
+
   is_valid_ = false;
   page_id_ = INVALID_PAGE_ID;
   frame_ = nullptr;
@@ -197,14 +195,14 @@ WritePageGuard::WritePageGuard(WritePageGuard &&that) noexcept
 auto WritePageGuard::operator=(WritePageGuard &&that) noexcept -> WritePageGuard & {
   if (this != &that) {
     Drop();
-    
+
     page_id_ = that.page_id_;
     frame_ = std::move(that.frame_);
     replacer_ = std::move(that.replacer_);
     bpm_latch_ = std::move(that.bpm_latch_);
     disk_scheduler_ = std::move(that.disk_scheduler_);
     is_valid_ = that.is_valid_;
-    
+
     that.is_valid_ = false;
     that.page_id_ = INVALID_PAGE_ID;
     that.frame_ = nullptr;
@@ -256,19 +254,17 @@ void WritePageGuard::Flush() {
   if (!is_valid_) {
     return;
   }
-  if (frame_->is_dirty_) {
-    auto promise = disk_scheduler_->CreatePromise();
-    auto future = promise.get_future();
-    
-    DiskRequest req{true, frame_->GetDataMut(), page_id_, std::move(promise)};
-    std::vector<DiskRequest> reqs;
-    reqs.push_back(std::move(req));
-    disk_scheduler_->Schedule(reqs);
-    future.get();
-    
-    std::scoped_lock<std::mutex> lock(*bpm_latch_);
-    frame_->is_dirty_ = false;
-  }
+  auto promise = disk_scheduler_->CreatePromise();
+  auto future = promise.get_future();
+
+  DiskRequest req{true, frame_->GetDataMut(), page_id_, std::move(promise)};
+  std::vector<DiskRequest> reqs;
+  reqs.push_back(std::move(req));
+  disk_scheduler_->Schedule(reqs);
+  future.get();
+
+  std::scoped_lock<std::mutex> lock(*bpm_latch_);
+  frame_->is_dirty_ = false;
 }
 
 /**
@@ -278,10 +274,10 @@ void WritePageGuard::Drop() {
   if (!is_valid_) {
     return;
   }
-  
+
   // 1. 先安全地释放独占页锁
   frame_->rwlatch_.unlock();
-  
+
   // 2. 然后获取全局缓冲池锁，修改页元数据和置换器
   {
     std::scoped_lock<std::mutex> lock(*bpm_latch_);
@@ -290,7 +286,7 @@ void WritePageGuard::Drop() {
       replacer_->SetEvictable(frame_->frame_id_, true);
     }
   }
-  
+
   is_valid_ = false;
   page_id_ = INVALID_PAGE_ID;
   frame_ = nullptr;
