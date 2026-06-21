@@ -78,6 +78,173 @@ auto B_PLUS_TREE_LEAF_PAGE_TYPE::KeyAt(int index) const -> KeyType {
   return key_array_[index]; 
 }
 
+FULL_INDEX_TEMPLATE_ARGUMENTS
+auto B_PLUS_TREE_LEAF_PAGE_TYPE::IsTombstoned(int index) const -> bool {
+  for (size_t i = 0; i < num_tombstones_; ++i) {
+    if (tombstones_[i] == static_cast<size_t>(index)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+FULL_INDEX_TEMPLATE_ARGUMENTS
+auto B_PLUS_TREE_LEAF_PAGE_TYPE::ValueAt(int index) const -> ValueType {
+  assert(index >= 0 && index < GetSize());
+  return rid_array_[index];
+}
+
+FULL_INDEX_TEMPLATE_ARGUMENTS
+auto B_PLUS_TREE_LEAF_PAGE_TYPE::KeyIndex(const KeyType &key, const KeyComparator &comparator) const -> int {
+  int size = GetSize();
+  int low = 0;
+  int high = size - 1;
+  while (low <= high) {
+    int mid = low + (high - low) / 2;
+    int cmp = comparator(key, key_array_[mid]);
+    if (cmp == 0) {
+      return mid;
+    }
+    if (cmp < 0) {
+      high = mid - 1;
+    } else {
+      low = mid + 1;
+    }
+  }
+  return low;
+}
+
+FULL_INDEX_TEMPLATE_ARGUMENTS
+void B_PLUS_TREE_LEAF_PAGE_TYPE::InsertAt(int idx, const KeyType &key, const ValueType &value) {
+  int size = GetSize();
+  assert(size < GetMaxSize());
+  for (int i = size; i > idx; --i) {
+    key_array_[i] = key_array_[i - 1];
+    rid_array_[i] = rid_array_[i - 1];
+  }
+  key_array_[idx] = key;
+  rid_array_[idx] = value;
+  SetSize(size + 1);
+
+  // 关键：更新墓碑索引漂移
+  for (size_t t = 0; t < num_tombstones_; ++t) {
+    if (tombstones_[t] >= static_cast<size_t>(idx)) {
+      tombstones_[t]++;
+    }
+  }
+}
+
+FULL_INDEX_TEMPLATE_ARGUMENTS
+void B_PLUS_TREE_LEAF_PAGE_TYPE::ApplyOldestTombstone() {
+  if (num_tombstones_ == 0) {
+    return;
+  }
+  size_t delete_idx = tombstones_[0];
+  int size = GetSize();
+  for (int i = delete_idx + 1; i < size; ++i) {
+    key_array_[i - 1] = key_array_[i];
+    rid_array_[i - 1] = rid_array_[i];
+  }
+  SetSize(size - 1);
+
+  // 调整剩余墓碑的索引
+  for (size_t t = 1; t < num_tombstones_; ++t) {
+    size_t old_val = tombstones_[t];
+    if (old_val > delete_idx) {
+      tombstones_[t - 1] = old_val - 1;
+    } else {
+      tombstones_[t - 1] = old_val;
+    }
+  }
+  num_tombstones_--;
+}
+
+FULL_INDEX_TEMPLATE_ARGUMENTS
+void B_PLUS_TREE_LEAF_PAGE_TYPE::InsertTombstone(int idx) {
+  if (LEAF_PAGE_TOMB_CNT == 0) {
+    // 物理直接删除
+    int size = GetSize();
+    for (int i = idx + 1; i < size; ++i) {
+      key_array_[i - 1] = key_array_[i];
+      rid_array_[i - 1] = rid_array_[i];
+    }
+    SetSize(size - 1);
+    return;
+  }
+
+  tombstones_[num_tombstones_++] = idx;
+  if (num_tombstones_ == LEAF_PAGE_TOMB_CNT) {
+    ApplyOldestTombstone();
+  }
+}
+
+FULL_INDEX_TEMPLATE_ARGUMENTS
+void B_PLUS_TREE_LEAF_PAGE_TYPE::ReviveAt(int idx, const ValueType &value) {
+  rid_array_[idx] = value;
+  // 从墓碑缓冲区移除此物理索引
+  size_t t_idx = num_tombstones_;
+  for (size_t i = 0; i < num_tombstones_; ++i) {
+    if (tombstones_[i] == static_cast<size_t>(idx)) {
+      t_idx = i;
+      break;
+    }
+  }
+  if (t_idx < num_tombstones_) {
+    for (size_t i = t_idx + 1; i < num_tombstones_; ++i) {
+      tombstones_[i - 1] = tombstones_[i];
+    }
+    num_tombstones_--;
+  }
+}
+
+FULL_INDEX_TEMPLATE_ARGUMENTS
+auto B_PLUS_TREE_LEAF_PAGE_TYPE::GetEntries() const -> std::vector<LeafEntry> {
+  std::vector<LeafEntry> entries;
+  entries.reserve(GetSize());
+  for (int i = 0; i < GetSize(); ++i) {
+    LeafEntry entry;
+    entry.key_ = key_array_[i];
+    entry.val_ = rid_array_[i];
+    entry.is_tomb_ = false;
+    entry.recency_ = 0;
+    for (size_t t = 0; t < num_tombstones_; ++t) {
+      if (tombstones_[t] == static_cast<size_t>(i)) {
+        entry.is_tomb_ = true;
+        entry.recency_ = t;
+        break;
+      }
+    }
+    entries.push_back(entry);
+  }
+  return entries;
+}
+
+FULL_INDEX_TEMPLATE_ARGUMENTS
+void B_PLUS_TREE_LEAF_PAGE_TYPE::SetEntries(const std::vector<LeafEntry> &entries) {
+  SetSize(entries.size());
+  struct TombTemp {
+    size_t original_recency;
+    size_t new_physical_idx;
+  };
+  std::vector<TombTemp> tombstones_temp;
+  for (size_t i = 0; i < entries.size(); ++i) {
+    key_array_[i] = entries[i].key_;
+    rid_array_[i] = entries[i].val_;
+    if (entries[i].is_tomb_) {
+      tombstones_temp.push_back({entries[i].recency_, i});
+    }
+  }
+  // 按原有的 recency（从最老到最新）进行排序
+  std::sort(tombstones_temp.begin(), tombstones_temp.end(), [](const TombTemp &a, const TombTemp &b) {
+    return a.original_recency < b.original_recency;
+  });
+
+  num_tombstones_ = tombstones_temp.size();
+  for (size_t t = 0; t < num_tombstones_; ++t) {
+    tombstones_[t] = tombstones_temp[t].new_physical_idx;
+  }
+}
+
 template class BPlusTreeLeafPage<GenericKey<4>, RID, GenericComparator<4>>;
 
 template class BPlusTreeLeafPage<GenericKey<8>, RID, GenericComparator<8>>;

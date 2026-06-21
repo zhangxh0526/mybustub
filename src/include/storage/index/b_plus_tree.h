@@ -122,6 +122,11 @@ class BPlusTree {
   std::shared_ptr<TracedBufferPoolManager> bpm_;
 
  private:
+  // (Spring 2025/2026) 核心自底向上分裂与合并借用 Helper
+  void Split(Context *ctx);
+  
+  void CoalesceOrRedistribute(Context *ctx);
+
   void ToGraph(page_id_t page_id, const BPlusTreePage *page, std::ofstream &out);
 
   void PrintTree(page_id_t page_id, const BPlusTreePage *page);

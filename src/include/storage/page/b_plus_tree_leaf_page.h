@@ -61,6 +61,25 @@ namespace bustub {
 FULL_INDEX_TEMPLATE_ARGUMENTS_DEFN
 class BPlusTreeLeafPage : public BPlusTreePage {
  public:
+  // (Spring 2025/2026) 补充 Helper 函数和逻辑抽象结构
+  struct LeafEntry {
+    KeyType key_;
+    ValueType val_;
+    bool is_tomb_{false};
+    size_t recency_{0};
+  };
+
+  auto IsTombstoned(int index) const -> bool;
+  auto ValueAt(int index) const -> ValueType;
+  auto KeyIndex(const KeyType &key, const KeyComparator &comparator) const -> int;
+  
+  void InsertAt(int idx, const KeyType &key, const ValueType &value);
+  void InsertTombstone(int idx);
+  void ApplyOldestTombstone();
+  void ReviveAt(int idx, const ValueType &value);
+
+  auto GetEntries() const -> std::vector<LeafEntry>;
+  void SetEntries(const std::vector<LeafEntry> &entries);
   // Delete all constructor / destructor to ensure memory safety
   BPlusTreeLeafPage() = delete;
   BPlusTreeLeafPage(const BPlusTreeLeafPage &other) = delete;

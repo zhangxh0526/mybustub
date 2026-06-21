@@ -46,6 +46,11 @@ namespace bustub {
 INDEX_TEMPLATE_ARGUMENTS
 class BPlusTreeInternalPage : public BPlusTreePage {
  public:
+  // (Spring 2025/2026) 补充内部节点查找和插入 Helper
+  auto Lookup(const KeyType &key, const KeyComparator &comparator) const -> ValueType;
+  void Insert(const KeyType &key, const ValueType &value, const KeyComparator &comparator);
+  void SetValueAt(int index, const ValueType &value) { page_id_array_[index] = value; }
+  void RemoveAt(int index);
   // Delete all constructor / destructor to ensure memory safety
   BPlusTreeInternalPage() = delete;
   BPlusTreeInternalPage(const BPlusTreeInternalPage &other) = delete;

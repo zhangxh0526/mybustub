@@ -91,6 +91,52 @@ auto B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueIndex(const ValueType &value) const ->
   return -1;
 }
 
+INDEX_TEMPLATE_ARGUMENTS
+auto B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key, const KeyComparator &comparator) const -> ValueType {
+  int size = GetSize();
+  assert(size > 0);
+  int low = 1;
+  int high = size - 1;
+  int target_idx = 0;
+  while (low <= high) {
+    int mid = low + (high - low) / 2;
+    if (comparator(key, key_array_[mid]) >= 0) {
+      target_idx = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return page_id_array_[target_idx];
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Insert(const KeyType &key, const ValueType &value, const KeyComparator &comparator) {
+  int size = GetSize();
+  int idx = 1;
+  while (idx < size && comparator(key_array_[idx], key) < 0) {
+    idx++;
+  }
+  for (int i = size; i > idx; --i) {
+    key_array_[i] = key_array_[i - 1];
+    page_id_array_[i] = page_id_array_[i - 1];
+  }
+  key_array_[idx] = key;
+  page_id_array_[idx] = value;
+  SetSize(size + 1);
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+void B_PLUS_TREE_INTERNAL_PAGE_TYPE::RemoveAt(int index) {
+  int size = GetSize();
+  assert(index >= 0 && index < size);
+  for (int i = index + 1; i < size; ++i) {
+    key_array_[i - 1] = key_array_[i];
+    page_id_array_[i - 1] = page_id_array_[i];
+  }
+  SetSize(size - 1);
+}
+
 // valuetype for internalNode should be page id_t
 template class BPlusTreeInternalPage<GenericKey<4>, page_id_t, GenericComparator<4>>;
 template class BPlusTreeInternalPage<GenericKey<8>, page_id_t, GenericComparator<8>>;
