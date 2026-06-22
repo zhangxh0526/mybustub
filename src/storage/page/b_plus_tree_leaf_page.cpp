@@ -59,23 +59,19 @@ auto B_PLUS_TREE_LEAF_PAGE_TYPE::GetTombstones() const -> std::vector<KeyType> {
  * Helper methods to set/get next page id
  */
 FULL_INDEX_TEMPLATE_ARGUMENTS
-auto B_PLUS_TREE_LEAF_PAGE_TYPE::GetNextPageId() const -> page_id_t { 
-  return next_page_id_; 
-}
+auto B_PLUS_TREE_LEAF_PAGE_TYPE::GetNextPageId() const -> page_id_t { return next_page_id_; }
 
 FULL_INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_LEAF_PAGE_TYPE::SetNextPageId(page_id_t next_page_id) {
-  next_page_id_ = next_page_id;
-}
+void B_PLUS_TREE_LEAF_PAGE_TYPE::SetNextPageId(page_id_t next_page_id) { next_page_id_ = next_page_id; }
 
 /*
  * Helper method to find and return the key associated with input "index" (a.k.a
  * array offset)
  */
 FULL_INDEX_TEMPLATE_ARGUMENTS
-auto B_PLUS_TREE_LEAF_PAGE_TYPE::KeyAt(int index) const -> KeyType { 
+auto B_PLUS_TREE_LEAF_PAGE_TYPE::KeyAt(int index) const -> KeyType {
   assert(index >= 0 && index < GetSize());
-  return key_array_[index]; 
+  return key_array_[index];
 }
 
 FULL_INDEX_TEMPLATE_ARGUMENTS
@@ -172,10 +168,14 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::InsertTombstone(int idx) {
     return;
   }
 
-  tombstones_[num_tombstones_++] = idx;
   if (num_tombstones_ == LEAF_PAGE_TOMB_CNT) {
+    size_t delete_idx = tombstones_[0];
     ApplyOldestTombstone();
+    if (static_cast<size_t>(idx) > delete_idx) {
+      idx--;
+    }
   }
+  tombstones_[num_tombstones_++] = idx;
 }
 
 FULL_INDEX_TEMPLATE_ARGUMENTS
@@ -221,27 +221,47 @@ auto B_PLUS_TREE_LEAF_PAGE_TYPE::GetEntries() const -> std::vector<LeafEntry> {
 
 FULL_INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::SetEntries(const std::vector<LeafEntry> &entries) {
-  SetSize(entries.size());
+  auto live_entries = entries;
+  while (true) {
+    auto oldest_tomb = live_entries.end();
+    for (auto iter = live_entries.begin(); iter != live_entries.end(); ++iter) {
+      if (iter->is_tomb_ && (oldest_tomb == live_entries.end() || iter->recency_ < oldest_tomb->recency_)) {
+        oldest_tomb = iter;
+      }
+    }
+
+    size_t tomb_count = 0;
+    for (const auto &entry : live_entries) {
+      if (entry.is_tomb_) {
+        tomb_count++;
+      }
+    }
+    if (tomb_count <= LEAF_PAGE_TOMB_CNT) {
+      break;
+    }
+    live_entries.erase(oldest_tomb);
+  }
+
+  SetSize(live_entries.size());
   struct TombTemp {
-    size_t original_recency;
-    size_t new_physical_idx;
+    size_t original_recency_;
+    size_t new_physical_idx_;
   };
   std::vector<TombTemp> tombstones_temp;
-  for (size_t i = 0; i < entries.size(); ++i) {
-    key_array_[i] = entries[i].key_;
-    rid_array_[i] = entries[i].val_;
-    if (entries[i].is_tomb_) {
-      tombstones_temp.push_back({entries[i].recency_, i});
+  for (size_t i = 0; i < live_entries.size(); ++i) {
+    key_array_[i] = live_entries[i].key_;
+    rid_array_[i] = live_entries[i].val_;
+    if (live_entries[i].is_tomb_) {
+      tombstones_temp.push_back({live_entries[i].recency_, i});
     }
   }
   // 按原有的 recency（从最老到最新）进行排序
-  std::sort(tombstones_temp.begin(), tombstones_temp.end(), [](const TombTemp &a, const TombTemp &b) {
-    return a.original_recency < b.original_recency;
-  });
+  std::sort(tombstones_temp.begin(), tombstones_temp.end(),
+            [](const TombTemp &a, const TombTemp &b) { return a.original_recency_ < b.original_recency_; });
 
   num_tombstones_ = tombstones_temp.size();
   for (size_t t = 0; t < num_tombstones_; ++t) {
-    tombstones_[t] = tombstones_temp[t].new_physical_idx;
+    tombstones_[t] = tombstones_temp[t].new_physical_idx_;
   }
 }
 

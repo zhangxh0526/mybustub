@@ -77,7 +77,7 @@ auto B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueAt(int index) const -> ValueType {
 
 /**
  * @brief Find the index corresponding to a specific value (child page ID).
- * 
+ *
  * @param value The value to search for
  * @return The index of the value, or -1 if not found.
  */
@@ -111,7 +111,8 @@ auto B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key, const KeyCompara
 }
 
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Insert(const KeyType &key, const ValueType &value, const KeyComparator &comparator) {
+void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Insert(const KeyType &key, const ValueType &value,
+                                            const KeyComparator &comparator) {
   int size = GetSize();
   int idx = 1;
   while (idx < size && comparator(key_array_[idx], key) < 0) {

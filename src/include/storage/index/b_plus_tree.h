@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <queue>
 #include <shared_mutex>
@@ -124,7 +125,7 @@ class BPlusTree {
  private:
   // (Spring 2025/2026) 核心自底向上分裂与合并借用 Helper
   void Split(Context *ctx);
-  
+
   void CoalesceOrRedistribute(Context *ctx);
 
   void ToGraph(page_id_t page_id, const BPlusTreePage *page, std::ofstream &out);
@@ -140,6 +141,7 @@ class BPlusTree {
   int leaf_max_size_;
   int internal_max_size_;
   page_id_t header_page_id_;
+  std::mutex mutation_mutex_;
 };
 
 /**

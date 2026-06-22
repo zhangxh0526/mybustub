@@ -35,9 +35,7 @@ FULL_INDEX_TEMPLATE_ARGUMENTS
 INDEXITERATOR_TYPE::~IndexIterator() = default;  // NOLINT
 
 FULL_INDEX_TEMPLATE_ARGUMENTS
-auto INDEXITERATOR_TYPE::IsEnd() -> bool { 
-  return page_id_ == INVALID_PAGE_ID; 
-}
+auto INDEXITERATOR_TYPE::IsEnd() -> bool { return page_id_ == INVALID_PAGE_ID; }
 
 FULL_INDEX_TEMPLATE_ARGUMENTS
 auto INDEXITERATOR_TYPE::operator*() -> std::pair<const KeyType &, const ValueType &> {
@@ -67,7 +65,7 @@ void INDEXITERATOR_TYPE::AdvanceToNextValid() {
     }
     page_id_t next_page_id = leaf->GetNextPageId();
     if (next_page_id == INVALID_PAGE_ID) {
-      guard_ = ReadPageGuard(); 
+      guard_ = ReadPageGuard();
       page_id_ = INVALID_PAGE_ID;
       index_ = -1;
       return;

@@ -72,7 +72,7 @@ class BPlusTreeLeafPage : public BPlusTreePage {
   auto IsTombstoned(int index) const -> bool;
   auto ValueAt(int index) const -> ValueType;
   auto KeyIndex(const KeyType &key, const KeyComparator &comparator) const -> int;
-  
+
   void InsertAt(int idx, const KeyType &key, const ValueType &value);
   void InsertTombstone(int idx);
   void ApplyOldestTombstone();

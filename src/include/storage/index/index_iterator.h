@@ -48,14 +48,12 @@ class IndexIterator {
     return page_id_ == itr.page_id_ && index_ == itr.index_;
   }
 
-  auto operator!=(const IndexIterator &itr) const -> bool {
-    return !(*this == itr);
-  }
+  auto operator!=(const IndexIterator &itr) const -> bool { return !(*this == itr); }
 
  private:
   std::shared_ptr<TracedBufferPoolManager> bpm_{nullptr};
   ReadPageGuard guard_;
-  page_id_t page_id_{INVALID_PAGE_ID}; // 记录 page_id
+  page_id_t page_id_{INVALID_PAGE_ID};  // 记录 page_id
   int index_{-1};
   std::pair<KeyType, ValueType> curr_val_;
 
